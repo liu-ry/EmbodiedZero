@@ -1,26 +1,26 @@
 """
-model/noise_schedule.py  —  噪声调度表 + 前向加噪 + 训练损失
+model/noise_schedule.py  —  Noise schedule + forward noising + training loss
 
-DDPM / DDIM / Stable Diffusion 等扩散模型变体共用的核心组件：
+Core component shared by DDPM / DDIM / Stable Diffusion and other diffusion variants:
 
-  1. β-schedule 计算（线性 / cosine 可选）
-  2. 前向加噪 q_sample  — 给干净数据添加 t 步噪声
-  3. 训练损失 p_losses   — MSE(预测噪声, 真实噪声)
+  1. β-schedule computation (linear or cosine)
+  2. Forward noising q_sample  — adds t steps of noise to clean data
+  3. Training loss p_losses    — MSE(predicted noise, true noise)
 
-各变体的区别仅在于"反向采样方式"，而非前向过程和训练损失，
-因此本文件对 DDPM / DDIM 完全通用。
+The only difference between variants is the "reverse sampling method";
+the forward process and training loss are identical for DDPM / DDIM.
 
-数学符号
---------
-  β_t            : 每步噪声强度
+Mathematical notation
+---------------------
+  β_t            : per-step noise magnitude
   α_t = 1 - β_t
-  ᾱ_t = ∏ α_s    : 累积乘积（alphas_cumprod）
+  ᾱ_t = ∏ α_s    : cumulative product (alphas_cumprod)
 
-前向过程
+Forward process
   q(x_t | x_0) = N(x_t; √ᾱ_t · x_0,  (1 - ᾱ_t) · I)
-  即 x_t = √ᾱ_t · x_0 + √(1-ᾱ_t) · ε,   ε ~ N(0,I)
+  i.e. x_t = √ᾱ_t · x_0 + √(1-ᾱ_t) · ε,   ε ~ N(0,I)
 
-训练目标
+Training objective
   L = E[||ε - ε_θ(x_t, t)||²]
 """
 
@@ -30,14 +30,14 @@ import torch.nn.functional as F
 
 class NoiseSchedule:
     """
-    预计算扩散过程所需的所有系数。
+    Pre-computes all coefficients needed for the diffusion process.
 
     Parameters
     ----------
-    num_timesteps : 扩散总步数 T
-    schedule      : 'linear'（DDPM 原始）或 'cosine'（改进版，生成质量更好）
-    beta_start    : 线性 schedule 的 β 起点
-    beta_end      : 线性 schedule 的 β 终点
+    num_timesteps : total diffusion steps T
+    schedule      : 'linear' (original DDPM) or 'cosine' (improved, better quality)
+    beta_start    : starting β for linear schedule
+    beta_end      : ending β for linear schedule
     """
 
     def __init__(self,
@@ -50,7 +50,7 @@ class NoiseSchedule:
         if schedule == 'linear':
             betas = torch.linspace(beta_start, beta_end, num_timesteps)
         elif schedule == 'cosine':
-            # Nichol & Dhariwal 2021: 余弦调度在低时间步噪声更小
+            # Nichol & Dhariwal 2021: cosine schedule has less noise at low timesteps
             steps = num_timesteps + 1
             t     = torch.linspace(0, num_timesteps, steps) / num_timesteps
             ab    = torch.cos((t + 0.008) / 1.008 * torch.pi / 2) ** 2
@@ -62,14 +62,14 @@ class NoiseSchedule:
         alphas         = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)   # ᾱ_t
 
-        # —— 前向过程系数 ——
+        # —— Forward process coefficients ——
         self._reg('betas',            betas)
         self._reg('alphas',           alphas)
         self._reg('alphas_cumprod',   alphas_cumprod)
         self._reg('sqrt_ab',          alphas_cumprod.sqrt())           # √ᾱ_t
         self._reg('sqrt_one_minus_ab', (1.0 - alphas_cumprod).sqrt()) # √(1-ᾱ_t)
 
-        # —— DDPM 反向采样系数（DDIM 不需要，但保留以兼容）——
+        # —— DDPM reverse sampling coefficients (not needed by DDIM, kept for compatibility) ——
         self._reg('sqrt_recip_alphas',  (1.0 / alphas).sqrt())
         self._reg('coef_eps',           betas / (1.0 - alphas_cumprod).sqrt())
         self._reg('sqrt_betas',         betas.sqrt())   # 后验方差 σ_t = √β_t
@@ -85,12 +85,12 @@ class NoiseSchedule:
         return self
 
     def _g(self, coef: torch.Tensor, t: torch.Tensor, ndim: int) -> torch.Tensor:
-        """按时间步索引系数，并广播到任意维度（图像/向量均适用）。"""
+        """Index coefficients by timestep and broadcast to arbitrary dimensions (images or vectors)."""
         return coef.gather(0, t).view(t.shape[0], *([1] * (ndim - 1)))
 
     # ------------------------------------------------------------------
-    # 前向加噪：q(x_t | x_0)
-    # 给干净数据添加 t 步噪声，DDPM / DDIM 训练时共用
+    # Forward noising: q(x_t | x_0)
+    # Adds t steps of noise to clean data; shared by DDPM / DDIM training
     # ------------------------------------------------------------------
     def q_sample(self,
                  x0:    torch.Tensor,
@@ -98,7 +98,7 @@ class NoiseSchedule:
                  noise: torch.Tensor | None = None
                  ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        返回 (x_t, noise)。
+        Returns (x_t, noise).
 
         x_t = √ᾱ_t · x_0 + √(1-ᾱ_t) · ε
         """
@@ -109,16 +109,16 @@ class NoiseSchedule:
         return s_ab * x0 + s_1ab * noise, noise
 
     # ------------------------------------------------------------------
-    # 训练损失：DDPM / DDIM 共用
+    # Training loss: shared by DDPM / DDIM
     # ------------------------------------------------------------------
     def p_losses(self, model, x0: torch.Tensor) -> torch.Tensor:
         """
-        随机采样 t，加噪，用网络预测噪声，返回 MSE loss。
+        Randomly samples t, adds noise, predicts noise with the network, returns MSE loss.
 
         Parameters
         ----------
-        model : 噪声预测网络 ε_θ，接受 (x_t, t) 返回预测噪声
-        x0    : 干净数据 (B, ...)
+        model : noise prediction network ε_θ, takes (x_t, t) and returns predicted noise
+        x0    : clean data (B, ...)
         """
         B = x0.shape[0]
         t = torch.randint(0, self.T, (B,), device=x0.device)

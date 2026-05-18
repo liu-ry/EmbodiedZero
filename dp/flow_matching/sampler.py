@@ -1,26 +1,26 @@
 """
-flow_matching/sampler.py  —  Flow Matching ODE 采样器
+flow_matching/sampler.py  —  Flow Matching ODE Sampler
 
-对应论文：《Flow Matching for Generative Modeling》(Lipman et al., 2022)
+Corresponding paper: "Flow Matching for Generative Modeling" (Lipman et al., 2022)
 
-推理算法（Euler ODE 积分）
---------------------------
-给定已训练的向量场网络 v_θ(x_t, t)，从 x_0 ~ N(0,I) 出发，
-用 Euler 方法数值积分 ODE：
+Inference algorithm (Euler ODE integration)
+--------------------------------------------
+Given a trained vector field network v_θ(x_t, t), starting from x_0 ~ N(0,I),
+numerically integrate the ODE using Euler's method:
 
     dx/dt = v_θ(x_t, t),   t: 0 → 1
 
-离散化（步长 h = 1/N）：
+Discretization (step size h = 1/N):
     x_{t+h} = x_t + h · v_θ(x_t, t)
 
-N 越大精度越高，N=100 通常已足够好。
-也可替换为更高阶方法（Heun、RK4 等）。
+Higher N gives better accuracy; N=100 is usually sufficient.
+Can also be replaced with higher-order methods (Heun, RK4, etc.).
 
-与 DDPM/DDIM 的对比
---------------------
-  DDPM   : 从 x_T（噪声）逐步去噪到 x_0（图像），t 从大到小
-  DDIM   : 同上，但可跳步（非马尔可夫）
-  FM ODE : t 从 0（噪声）到 1（图像），正方向积分，无"去噪"概念，更简洁
+Comparison with DDPM/DDIM
+--------------------------
+  DDPM   : denoises from x_T (noise) to x_0 (image) step by step, t from large to small
+  DDIM   : same, but can skip steps (non-Markovian)
+  FM ODE : t from 0 (noise) to 1 (image), forward integration, no "denoising" concept, simpler
 """
 
 import torch
@@ -30,12 +30,12 @@ from model.flow_schedule import FlowSchedule
 
 class FlowMatchingSampler:
     """
-    基于 FlowSchedule 的 ODE 采样器（Euler 方法）。
+    ODE sampler based on FlowSchedule (Euler method).
 
     Parameters
     ----------
-    schedule   : FlowSchedule 实例（主要用于获取 T 做时间步映射）
-    ode_steps  : Euler 积分步数（默认 100）
+    schedule   : FlowSchedule instance (mainly used to get T for timestep mapping)
+    ode_steps  : number of Euler integration steps (default 100)
     """
 
     def __init__(self,
@@ -45,7 +45,7 @@ class FlowMatchingSampler:
         self.ode_steps = ode_steps
 
     # ------------------------------------------------------------------
-    # 单步 Euler 更新
+    # Single Euler step
     # ------------------------------------------------------------------
     @torch.no_grad()
     def _euler_step(self,
@@ -55,29 +55,29 @@ class FlowMatchingSampler:
                     dt:    float
                     ) -> torch.Tensor:
         """
-        Euler 单步：x_{t+dt} = x_t + dt · v_θ(x_t, t)。
+        Euler single step: x_{t+dt} = x_t + dt · v_θ(x_t, t).
 
         Parameters
         ----------
-        model  : 向量场网络 v_θ(x, t_int)
-        x_t    : 当前状态  (B, ...)
-        t_val  : 当前连续时间  ∈ [0, 1]
-        dt     : 时间步长（正值，因为从 0 → 1）
+        model  : vector field network v_θ(x, t_int)
+        x_t    : current state  (B, ...)
+        t_val  : current continuous time  ∈ [0, 1]
+        dt     : time step size (positive, since going 0 → 1)
         """
         B      = x_t.shape[0]
         T      = self.sch.T
 
-        # 映射连续时间 t_val ∈ [0,1] 到整数时间步 ∈ [0, T-1]
+        # map continuous time t_val ∈ [0,1] to integer timestep ∈ [0, T-1]
         t_int  = torch.full((B,), int(t_val * (T - 1)), device=x_t.device, dtype=torch.long)
         t_int  = t_int.clamp(0, T - 1)
 
-        # 预测向量场
+        # predict vector field
         v_pred = model(x_t, t_int)
 
         return x_t + dt * v_pred
 
     # ------------------------------------------------------------------
-    # Heun 二阶校正步（可选，精度更高）
+    # Heun second-order correction step (optional, higher accuracy)
     # ------------------------------------------------------------------
     @torch.no_grad()
     def _heun_step(self,
@@ -87,13 +87,13 @@ class FlowMatchingSampler:
                    dt:    float
                    ) -> torch.Tensor:
         """
-        Heun 方法（梯形规则）：用 Euler 预估，再用平均向量场校正。
-        比 Euler 精度高一阶，推理步数可减半。
+        Heun method (trapezoidal rule): Euler predictor followed by average vector field correction.
+        One order more accurate than Euler; can halve inference steps.
         """
-        # 预估（Euler）
+        # predictor (Euler)
         x_pred = self._euler_step(model, x_t, t_val, dt)
 
-        # 校正：用终点向量场取平均
+        # corrector: average with endpoint vector field
         t_next = min(t_val + dt, 1.0)
         B      = x_t.shape[0]
         T      = self.sch.T
@@ -110,7 +110,7 @@ class FlowMatchingSampler:
         return x_t + dt * 0.5 * (v_cur + v_next)
 
     # ------------------------------------------------------------------
-    # 完整采样：x_0 ~ N(0,I) → x_1（图像）
+    # Full sampling: x_0 ~ N(0,I) → x_1 (image)
     # ------------------------------------------------------------------
     @torch.no_grad()
     def sample(self,
@@ -121,20 +121,20 @@ class FlowMatchingSampler:
                save_every: int | None = None
                ) -> tuple[torch.Tensor, list]:
         """
-        从标准正态噪声用 ODE 积分到数据分布。
+        Integrates ODE from standard normal noise to data distribution.
 
         Parameters
         ----------
-        model      : 向量场网络 v_θ，接口与 SimpleUNet 相同
-        shape      : 输出形状，例如 (16, 1, 28, 28) 或隐空间形状
-        device     : 计算设备
-        method     : 积分方法，'euler' 或 'heun'
-        save_every : 每隔该步数保存中间帧（可选）
+        model      : vector field network v_θ, same interface as SimpleUNet
+        shape      : output shape, e.g. (16, 1, 28, 28) or latent space shape
+        device     : compute device
+        method     : integration method, 'euler' or 'heun'
+        save_every : save intermediate frames every this many steps (optional)
 
         Returns
         -------
-        x      : 最终生成样本（对应 t=1 处的数据）
-        frames : 中间帧列表（顺序为 t=0→1）
+        x      : final generated sample (data at t=1)
+        frames : list of intermediate frames (ordered t=0→1)
         """
         N      = self.ode_steps
         dt     = 1.0 / N

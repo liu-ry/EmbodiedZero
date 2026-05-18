@@ -1,11 +1,14 @@
 from __future__ import print_function
 import argparse
+import os
 import torch
 import torch.utils.data
 from torch import nn, optim
 from torch.nn import functional as F
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
+
+os.makedirs('results', exist_ok=True)
 
 
 parser = argparse.ArgumentParser(description='VAE MNIST Example')
@@ -58,7 +61,7 @@ class VAE(nn.Module):
         return self.fc21(h1), self.fc22(h1)
 
     def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5*logvar) #（代码里一般输出 log 方差，数值稳定）
+        std = torch.exp(0.5*logvar)  # network outputs log-variance for numerical stability
         eps = torch.randn_like(std)
         return mu + eps*std
 

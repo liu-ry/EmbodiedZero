@@ -1,16 +1,16 @@
 """
-ddpm/main.py  —  DDPM 图像生成训练脚本（MNIST）
+run_ddpm.py  —  DDPM image generation training script (MNIST)
 
-依赖关系
---------
-  model/model.py          → SimpleUNet（噪声预测网络，与 DDIM/SD 共用）
-  model/noise_schedule.py → NoiseSchedule（β-schedule + 前向加噪 + 训练损失）
-  ddpm/sampler.py          → DDPMSampler（DDPM 特有的祖先采样）
+Dependencies
+------------
+  model/model.py          → SimpleUNet (noise prediction network, shared with DDIM/SD)
+  model/noise_schedule.py → NoiseSchedule (β-schedule + forward noising + training loss)
+  ddpm/sampler.py         → DDPMSampler (DDPM ancestral sampling)
 
-保存内容（results/ 目录）
-------------------------
-  samples_epoch_{N}.png      每 epoch 生成的 16 张样本
-  denoising_epoch_{N}.png    去噪轨迹图（从纯噪声到清晰图像约 10 帧）
+Saved outputs (results/ directory)
+------------------------------------
+  samples_epoch_{N}.png      16 generated samples per epoch
+  denoising_epoch_{N}.png    denoising trajectory (~10 frames, pure noise → clear image)
 """
 
 from __future__ import print_function
@@ -41,7 +41,7 @@ parser.add_argument('--lr',           type=float, default=2e-4)
 parser.add_argument('--timesteps',    type=int,   default=1000)
 parser.add_argument('--schedule',     type=str,   default='linear',
                     choices=['linear', 'cosine'],
-                    help='β-schedule 类型 (default: linear)')
+                    help='beta schedule type (default: linear)')
 parser.add_argument('--seed',         type=int,   default=42)
 parser.add_argument('--log-interval', type=int,   default=100)
 parser.add_argument('--no-cuda',      action='store_true')

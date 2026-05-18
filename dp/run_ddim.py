@@ -1,41 +1,41 @@
 """
-run_ddim.py  —  DDIM 图像生成训练脚本（MNIST）
+run_ddim.py  —  DDIM image generation training script (MNIST)
 
-算法说明
---------
-  DDIM（Denoising Diffusion Implicit Models, Song et al. 2020）
-  与 DDPM 使用 **完全相同的训练目标**（预测噪声 ε），
-  区别仅在于 **推理（采样）阶段**：
-    - DDPM：每步加随机噪声，需要全部 T=1000 步
-    - DDIM：确定性非马尔可夫跳步采样，50~100 步即可得到相近质量
+Algorithm
+---------
+  DDIM (Denoising Diffusion Implicit Models, Song et al. 2020)
+  Uses the **exact same training objective** as DDPM (predicting noise ε),
+  differing only in the **inference (sampling) phase**:
+    - DDPM: adds random noise each step, requires all T=1000 steps
+    - DDIM: deterministic non-Markovian skipping, 50–100 steps yields comparable quality
 
-依赖关系
---------
-  model/model.py          → SimpleUNet（与 DDPM 共用）
-  model/noise_schedule.py → NoiseSchedule（与 DDPM 共用）
-  ddim/sampler.py         → DDIMSampler（DDIM 特有采样逻辑）
+Dependencies
+------------
+  model/model.py          → SimpleUNet (shared with DDPM)
+  model/noise_schedule.py → NoiseSchedule (shared with DDPM)
+  ddim/sampler.py         → DDIMSampler (DDIM-specific sampling logic)
 
-主要参数
---------
-  --ddim-steps   : DDIM 采样步数（默认 50，可设为 20~200）
-  --eta          : DDIM 随机系数 η（0=纯确定性，1≈DDPM）
-  其余参数与 run_ddpm.py 相同
+Key arguments
+-------------
+  --ddim-steps   : DDIM sampling steps (default 50, range 20–200)
+  --eta          : DDIM stochasticity η (0=fully deterministic, 1≈DDPM)
+  other args same as run_ddpm.py
 
-保存内容（results_ddim/ 目录）
-------------------------------
-  samples_epoch_{N}.png      每 epoch 生成的 16 张样本
-  denoising_epoch_{N}.png    去噪轨迹图（约 8 帧）
-  best_model.pt              最佳验证损失对应的模型权重
+Saved outputs (results_ddim/ directory)
+-----------------------------------------
+  samples_epoch_{N}.png      16 generated samples per epoch
+  denoising_epoch_{N}.png    denoising trajectory (~8 frames)
+  best_model.pt              model weights at best validation loss
 
-使用示例
---------
-  # 标准训练（50步确定性 DDIM）
+Usage
+-----
+  # Standard training (50-step deterministic DDIM)
   python run_ddim.py
 
-  # 使用预训练的 DDPM 权重直接采样（跳过训练，仅做推理对比）
+  # Load a pretrained DDPM checkpoint and run inference only (skip training)
   python run_ddim.py --epochs 0 --load-ckpt results/best_model.pt
 
-  # 随机 DDIM（η=1 近似 DDPM）
+  # Stochastic DDIM (η=1 approximates DDPM)
   python run_ddim.py --eta 1.0 --ddim-steps 100
 """
 
@@ -64,11 +64,11 @@ parser.add_argument('--epochs',       type=int,   default=20)
 parser.add_argument('--batch-size',   type=int,   default=128)
 parser.add_argument('--lr',           type=float, default=2e-4)
 parser.add_argument('--timesteps',    type=int,   default=1000,
-                    help='扩散总步数 T（训练时使用的最大时间步）')
+                    help='total diffusion timesteps T (maximum timestep used during training)')
 parser.add_argument('--ddim-steps',   type=int,   default=50,
-                    help='DDIM 推理步数 S（≤ timesteps，越少越快）')
+                    help='DDIM inference steps S (≤ timesteps; fewer = faster)')
 parser.add_argument('--eta',          type=float, default=0.0,
-                    help='DDIM 随机系数 η（0=确定性，1≈DDPM）')
+                    help='DDIM stochasticity η (0=deterministic, 1≈DDPM)')
 parser.add_argument('--schedule',     type=str,   default='linear',
                     choices=['linear', 'cosine'])
 parser.add_argument('--seed',         type=int,   default=42)
@@ -76,7 +76,7 @@ parser.add_argument('--log-interval', type=int,   default=100)
 parser.add_argument('--no-cuda',      action='store_true')
 parser.add_argument('--results-dir',  type=str,   default='results_ddim')
 parser.add_argument('--load-ckpt',    type=str,   default=None,
-                    help='加载已有权重后直接推理（--epochs 0 时跳过训练）')
+                    help='load existing weights and run inference (use with --epochs 0 to skip training)')
 args = parser.parse_args()
 
 # ---------------------------------------------------------------------------

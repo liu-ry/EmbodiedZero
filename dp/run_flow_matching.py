@@ -1,49 +1,49 @@
 """
-run_flow_matching.py  —  Flow Matching 图像生成训练脚本（MNIST）
+run_flow_matching.py  —  Flow Matching image generation training script (MNIST)
 
-算法说明
---------
-Flow Matching（Lipman et al., 2022）是一种比 DDPM/DDIM 更简洁的生成框架：
+Algorithm
+---------
+Flow Matching (Lipman et al., 2022) is a cleaner generative framework than DDPM/DDIM:
 
-  核心思路
-  ├─ 定义从噪声 p_0=N(0,I) 到数据 p_1 的直线流（OT-CFM）
-  ├─ 训练向量场网络 v_θ(x_t, t) 拟合流的切向量方向
-  └─ 推理时用 Euler/Heun ODE 积分从 x_0 → x_1
+  Core idea
+  ├─ Define a straight-line flow (OT-CFM) from noise p_0=N(0,I) to data p_1
+  ├─ Train a vector-field network v_θ(x_t, t) to fit the tangent direction of the flow
+  └─ At inference, integrate x_0 → x_1 with an Euler/Heun ODE solver
 
-  训练目标（OT-CFM 最优传输条件流匹配）
-  ├─ 采样 t ~ Uniform(0,1)，x_0 ~ N(0,I)，x_1 ~ p_data
-  ├─ 计算插值 x_t = (1 - t) · x_0 + t · x_1
-  └─ 最小化 ||v_θ(x_t, t) - (x_1 - x_0)||²
+  Training objective (OT-CFM: Optimal Transport Conditional Flow Matching)
+  ├─ Sample t ~ Uniform(0,1), x_0 ~ N(0,I), x_1 ~ p_data
+  ├─ Compute interpolation x_t = (1 - t) · x_0 + t · x_1
+  └─ Minimize ||v_θ(x_t, t) - (x_1 - x_0)||²
 
-与 DDPM/DDIM 的对比
--------------------
-  DDPM   : 马尔可夫加噪 T=1000 步，学习 ε_θ，必须逐步去噪
-  DDIM   : 同上，但可 50 步跳步采样（非马尔可夫）
-  Flow FM: 连续时间，学习向量场 v_θ，推理用 ODE（任意步数，通常 100 步）
-           数学更简洁，训练更稳定，采样质量通常更好
+Comparison with DDPM/DDIM
+--------------------------
+  DDPM    : Markov noising with T=1000 steps; learns ε_θ; must denoise step-by-step
+  DDIM    : Same, but can skip steps (non-Markovian, ~50 steps)
+  Flow FM : Continuous time; learns vector field v_θ; inference via ODE (any step count,
+            typically 100 steps); simpler math, more stable training, often better quality
 
-依赖关系
---------
-  model/model.py         → SimpleUNet（这里用于预测向量场，复用同一网络结构）
-  model/flow_schedule.py → FlowSchedule（CFM 数据插值 + 训练损失）
-  flow_matching/sampler.py → FlowMatchingSampler（Euler/Heun ODE 积分）
+Dependencies
+------------
+  model/model.py          → SimpleUNet (used here to predict v_θ instead of ε_θ, same architecture)
+  model/flow_schedule.py  → FlowSchedule (CFM data interpolation + training loss)
+  flow_matching/sampler.py → FlowMatchingSampler (Euler/Heun ODE integration)
 
-使用示例
---------
-  # 标准训练（Euler 100 步）
+Usage
+-----
+  # Standard training (Euler 100 steps)
   python run_flow_matching.py
 
-  # 使用 Heun 方法（50 步达到与 Euler 100 步相近质量）
+  # Heun method (50 steps reaches quality comparable to Euler 100 steps)
   python run_flow_matching.py --ode-steps 50 --ode-method heun
 
-  # 快速测试
+  # Quick test
   python run_flow_matching.py --epochs 2 --ode-steps 20
 
-保存内容（results_fm/ 目录）
-─────────────────────────────
-  samples_epoch_{N}.png      每 epoch 生成的 16 张样本
-  trajectory_epoch_{N}.png   ODE 轨迹图（从纯噪声到清晰图像约 8 帧）
-  best_model.pt              最佳验证损失对应的模型权重
+Saved outputs (results_fm/ directory)
+────────────────────────────────────────
+  samples_epoch_{N}.png      16 generated samples per epoch
+  trajectory_epoch_{N}.png   ODE trajectory (~8 frames, pure noise → clear image)
+  best_model.pt              model weights at best validation loss
 """
 
 from __future__ import print_function
@@ -71,20 +71,20 @@ parser.add_argument('--epochs',       type=int,   default=20)
 parser.add_argument('--batch-size',   type=int,   default=128)
 parser.add_argument('--lr',           type=float, default=2e-4)
 parser.add_argument('--timesteps',    type=int,   default=1000,
-                    help='时间步嵌入的离散化数（不影响连续流的数学）')
+                    help='integer discretization for time embedding (does not affect the continuous-flow math)')
 parser.add_argument('--sigma-min',    type=float, default=1e-4,
-                    help='条件流最小噪声（数值稳定项，通常无需修改）')
+                    help='minimum noise in the conditional flow (numerical stability term; usually no need to change)')
 parser.add_argument('--ode-steps',    type=int,   default=100,
-                    help='推理时 ODE 积分步数（越多越精确，通常 50-200）')
+                    help='ODE integration steps at inference (more = more accurate, typically 50–200)')
 parser.add_argument('--ode-method',   type=str,   default='euler',
                     choices=['euler', 'heun'],
-                    help='ODE 积分方法（heun 精度更高，步数可减半）')
+                    help='ODE integrator (heun is higher-order; half the steps for similar quality)')
 parser.add_argument('--seed',         type=int,   default=42)
 parser.add_argument('--log-interval', type=int,   default=100)
 parser.add_argument('--no-cuda',      action='store_true')
 parser.add_argument('--results-dir',  type=str,   default='results_fm')
 parser.add_argument('--load-ckpt',    type=str,   default=None,
-                    help='加载已有权重路径，用于跳过训练直接推理')
+                    help='path to existing checkpoint for skipping training and running inference directly')
 args = parser.parse_args()
 
 # ---------------------------------------------------------------------------
@@ -118,7 +118,7 @@ val_loader = torch.utils.data.DataLoader(
 # ---------------------------------------------------------------------------
 # 模型 + 调度 + 采样器
 # ---------------------------------------------------------------------------
-# SimpleUNet 复用：这里预测的是向量场 v_θ 而非噪声 ε_θ，但网络结构完全相同
+# SimpleUNet reused here: predicts vector field v_θ instead of noise ε_θ, same architecture
 model    = SimpleUNet(in_channels=1, base_channels=64, time_emb_dim=128).to(device)
 schedule = FlowSchedule(num_timesteps=args.timesteps, sigma_min=args.sigma_min).to(device)
 sampler  = FlowMatchingSampler(schedule, ode_steps=args.ode_steps)
@@ -138,7 +138,7 @@ def train(epoch: int) -> float:
     for batch_idx, (imgs, _) in enumerate(train_loader):
         imgs = imgs.to(device)
         optimizer.zero_grad()
-        loss = schedule.p_losses(model, imgs)   # CFM 损失：MSE(v_θ(x_t,t), u_t)
+        loss = schedule.p_losses(model, imgs)   # CFM loss: MSE(v_θ(x_t,t), u_t)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()

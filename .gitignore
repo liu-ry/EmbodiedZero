@@ -1,0 +1,20 @@
+# Generated results directories
+vae/results/
+dp/results_ddpm/
+dp/results_ddim/
+dp/results_sd/
+dp/results_fm/
+
+# Downloaded datasets
+data/
+vae/data/
+
+# Model checkpoints
+*.pt
+*.pth
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env

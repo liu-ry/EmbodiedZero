@@ -1,19 +1,19 @@
 """
-model/model.py  —  UNet 噪声预测骨干网络
+model/model.py  —  UNet noise prediction backbone
 
-所有扩散模型变体（DDPM / DDIM / Stable Diffusion 等）都使用同一个
-"噪声预测网络"来估计 ε_θ，该文件提供可复用的 SimpleUNet 实现。
+All diffusion model variants (DDPM / DDIM / Stable Diffusion / etc.) use the same
+"noise prediction network" to estimate ε_θ. This file provides a reusable SimpleUNet.
 
-网络结构
---------
-  编码器（下采样）→ 瓶颈 → 解码器（上采样）
-  每层注入 Sinusoidal 时间步嵌入；编解码器之间有 skip connection。
+Network structure
+-----------------
+  Encoder (downsampling) → Bottleneck → Decoder (upsampling)
+  Sinusoidal timestep embedding injected at every layer; skip connections between encoder and decoder.
 
-输入 / 输出
------------
-  x_t : (B, C, H, W)   加噪图像
-  t   : (B,)            整数时间步
-  → 预测噪声 ε_θ : (B, C, H, W)
+Input / Output
+--------------
+  x_t : (B, C, H, W)   noisy image
+  t   : (B,)            integer timestep
+  → predicted noise ε_θ : (B, C, H, W)
 """
 
 import math
@@ -22,7 +22,7 @@ import torch.nn as nn
 
 
 # ---------------------------------------------------------------------------
-# 工具：自适应 GroupNorm（channel 数少时自动减少 group 数）
+# Utility: adaptive GroupNorm (reduces group count when channel count is small)
 # ---------------------------------------------------------------------------
 def _norm(ch: int) -> nn.GroupNorm:
     num_groups = min(8, ch)
@@ -32,9 +32,9 @@ def _norm(ch: int) -> nn.GroupNorm:
 
 
 # ---------------------------------------------------------------------------
-# 时间步正弦嵌入
-# 将整数 t 映射为连续向量，让网络感知当前所处的扩散阶段。
-# 与 Transformer 位置编码完全一致。
+# Sinusoidal timestep embedding
+# Maps integer t to a continuous vector so the network knows which diffusion stage it is at.
+# Identical to Transformer positional encoding.
 # ---------------------------------------------------------------------------
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim: int):
@@ -51,12 +51,10 @@ class SinusoidalPosEmb(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# 带时间嵌入的残差卷积块
+# Residual conv block with timestep embedding
 # ---------------------------------------------------------------------------
 class ResBlock(nn.Module):
-    """
-    Conv → Norm → SiLU → Conv，加上时间步偏置和残差捷径。
-    """
+    """Conv → Norm → SiLU → Conv, with timestep bias injection and residual shortcut."""
 
     def __init__(self, in_ch: int, out_ch: int, time_dim: int):
         super().__init__()
@@ -76,26 +74,26 @@ class ResBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
         h = self.block1(x)
-        h = h + self.time_proj(t_emb)[:, :, None, None]  # 时间偏置广播到空间
+        h = h + self.time_proj(t_emb)[:, :, None, None]  # broadcast time bias across spatial dims
         h = self.block2(h)
         return h + self.shortcut(x)
 
 
 # ---------------------------------------------------------------------------
-# SimpleUNet（针对 MNIST 28×28 设计，可扩展到更大分辨率）
+# SimpleUNet (designed for MNIST 28×28, extensible to larger resolutions)
 # ---------------------------------------------------------------------------
 class SimpleUNet(nn.Module):
     """
-    轻量级 UNet，适用于灰度 28×28 图像。
+    Lightweight UNet for 28×28 grayscale images.
 
-    通道: 1 → 64 → 128 → 256(瓶颈) → 128 → 64 → 1
-    空间: 28 → 14 → 7(瓶颈) → 14 → 28
+    Channels: 1 → 64 → 128 → 256 (bottleneck) → 128 → 64 → 1
+    Spatial:  28 → 14 → 7 (bottleneck) → 14 → 28
 
-    扩展提示
-    --------
-    - 增大 base_channels 可提升生成质量
-    - 为支持文本/类别条件（Stable Diffusion），可在瓶颈层加入 Cross-Attention
-    - 为支持更高分辨率，增加更多下采样/上采样层即可
+    Extension tips
+    --------------
+    - Increase base_channels for higher generation quality
+    - Add Cross-Attention at the bottleneck for text/class conditioning (Stable Diffusion)
+    - Add more down/up-sampling layers to support higher resolutions
     """
 
     def __init__(self,
@@ -106,9 +104,9 @@ class SimpleUNet(nn.Module):
         t  = time_emb_dim
         c1 = base_channels        # 64
         c2 = base_channels * 2    # 128
-        c3 = base_channels * 4    # 256（瓶颈）
+        c3 = base_channels * 4    # 256 (bottleneck)
 
-        # 时间嵌入 MLP
+        # Timestep embedding MLP
         self.time_emb = nn.Sequential(
             SinusoidalPosEmb(t),
             nn.Linear(t, t * 2),
@@ -116,23 +114,23 @@ class SimpleUNet(nn.Module):
             nn.Linear(t * 2, t),
         )
 
-        # 编码器
+        # Encoder
         self.enc1  = ResBlock(in_channels, c1, t)               # 28×28
         self.down1 = nn.Conv2d(c1, c1, 4, stride=2, padding=1)  # → 14×14
         self.enc2  = ResBlock(c1, c2, t)                         # 14×14
         self.down2 = nn.Conv2d(c2, c2, 4, stride=2, padding=1)  # → 7×7
 
-        # 瓶颈
+        # Bottleneck
         self.mid1 = ResBlock(c2, c3, t)
         self.mid2 = ResBlock(c3, c2, t)
 
-        # 解码器（skip connection：上采样输出 concat 对应编码层特征）
+        # Decoder (skip connections: concat upsampled output with encoder features)
         self.up2  = nn.ConvTranspose2d(c2, c2, 4, stride=2, padding=1)  # → 14×14
         self.dec2 = ResBlock(c2 + c2, c1, t)
         self.up1  = nn.ConvTranspose2d(c1, c1, 4, stride=2, padding=1)  # → 28×28
         self.dec1 = ResBlock(c1 + c1, c1, t)
 
-        # 输出投影
+        # Output projection
         self.out = nn.Sequential(
             _norm(c1),
             nn.SiLU(),
@@ -147,7 +145,7 @@ class SimpleUNet(nn.Module):
         e2 = self.enc2(self.down1(e1), t_emb)
         m  = self.mid2(self.mid1(self.down2(e2), t_emb), t_emb)
 
-        # 用双线性插值对齐 skip connection 的空间尺寸（支持任意输入分辨率）
+        # bilinear interpolation to align skip-connection spatial dims (supports arbitrary input resolution)
         up2_out = F.interpolate(self.up2(m),  size=e2.shape[2:], mode='bilinear', align_corners=False)
         d2 = self.dec2(torch.cat([up2_out, e2], dim=1), t_emb)
         up1_out = F.interpolate(self.up1(d2), size=e1.shape[2:], mode='bilinear', align_corners=False)

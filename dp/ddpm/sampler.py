@@ -1,16 +1,16 @@
 """
-ddpm/sampler.py  —  DDPM 祖先采样器（Ancestral Sampler）
+ddpm/sampler.py  —  DDPM Ancestral Sampler
 
-DDPM 特有的反向采样方式：
+DDPM's specific reverse sampling method:
   x_{t-1} = 1/√α_t · (x_t - β_t/√(1-ᾱ_t) · ε_θ(x_t,t)) + σ_t · z
-  其中 z ~ N(0,I)（t>0 时），t=0 时不加噪声
+  where z ~ N(0,I) (when t>0); no noise is added at t=0
 
-与 DDIM 的区别
---------------
-  DDPM : 每步加随机噪声 σ_t·z  → 随机采样，需要全部 T 步
-  DDIM : 每步确定性更新          → 可跳步，100 步即可得到与 1000 步相近的质量
+Difference from DDIM
+---------------------
+  DDPM : adds random noise σ_t·z at each step  → stochastic sampling, requires all T steps
+  DDIM : deterministic update at each step       → can skip steps, 100 steps gives quality close to 1000
 
-本文件仅包含 DDPM 特有的采样逻辑；前向加噪和训练损失在 model/ 中。
+This file contains only DDPM-specific sampling logic; forward noising and training loss are in model/.
 """
 
 import torch
@@ -19,22 +19,22 @@ from model.noise_schedule import NoiseSchedule
 
 class DDPMSampler:
     """
-    基于 NoiseSchedule 的 DDPM 祖先采样器。
+    DDPM ancestral sampler based on NoiseSchedule.
 
     Parameters
     ----------
-    schedule : 已初始化并 .to(device) 的 NoiseSchedule 实例
+    schedule : an initialized and .to(device) NoiseSchedule instance
     """
 
     def __init__(self, schedule: NoiseSchedule):
         self.sch = schedule
 
     # ------------------------------------------------------------------
-    # 单步反向去噪：x_t → x_{t-1}
+    # Single-step reverse denoising: x_t → x_{t-1}
     # ------------------------------------------------------------------
     @torch.no_grad()
     def p_sample(self, model, x_t: torch.Tensor, t_val: int) -> torch.Tensor:
-        """DDPM 单步去噪（带随机噪声）。"""
+        """Single DDPM denoising step (with random noise)."""
         sch  = self.sch
         B    = x_t.shape[0]
         t    = torch.full((B,), t_val, device=x_t.device, dtype=torch.long)
@@ -51,7 +51,7 @@ class DDPMSampler:
         return mean
 
     # ------------------------------------------------------------------
-    # 完整反向采样：x_T ~ N(0,I) → x_0
+    # Full reverse sampling: x_T ~ N(0,I) → x_0
     # ------------------------------------------------------------------
     @torch.no_grad()
     def sample(self,
@@ -61,19 +61,19 @@ class DDPMSampler:
                save_every: int | None = None
                ) -> tuple[torch.Tensor, list]:
         """
-        从纯高斯噪声逐步去噪，生成样本。
+        Iteratively denoises from pure Gaussian noise to generate samples.
 
         Parameters
         ----------
-        model      : 噪声预测网络 ε_θ
-        shape      : 输出形状，例如 (16, 1, 28, 28)
-        device     : 计算设备
-        save_every : 每隔该步数保存一帧（用于可视化去噪轨迹）
+        model      : noise prediction network ε_θ
+        shape      : output shape, e.g. (16, 1, 28, 28)
+        device     : compute device
+        save_every : save a frame every this many steps (for visualizing denoising trajectory)
 
         Returns
         -------
-        x      : 最终生成样本  shape
-        frames : 中间帧列表（仅 save_every 不为 None 时有内容，顺序为 T→0）
+        x      : final generated sample  shape
+        frames : list of intermediate frames (only populated when save_every is not None, ordered T→0)
         """
         x      = torch.randn(shape, device=device)
         frames = []

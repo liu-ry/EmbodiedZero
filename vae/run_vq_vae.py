@@ -1,21 +1,21 @@
 """
-VQ-VAE 大图版本
-支持 STL-10（96×96）或自定义图片目录，训练任意分辨率图像
+VQ-VAE for high-resolution images
+Supports STL-10 (96×96) or a custom image directory, training at arbitrary resolution.
 
-编码器下采样倍数可选：
-  --downsample 4   -> 4×  缩小（2层 stride-2 Conv），适合 96×96 / 128×128
-  --downsample 8   -> 8×  缩小（3层 stride-2 Conv），适合 256×256（默认）
-  --downsample 16  -> 16× 缩小（4层 stride-2 Conv），适合 512×512 及以上
+Encoder downsampling options:
+  --downsample 4   -> 4×  reduction (2 stride-2 Conv layers), suitable for 96×96 / 128×128
+  --downsample 8   -> 8×  reduction (3 stride-2 Conv layers), suitable for 256×256 (default)
+  --downsample 16  -> 16× reduction (4 stride-2 Conv layers), suitable for 512×512 and above
 
-用法示例：
-  # STL-10（96×96，需手动下载解压到 data/stl10_binary/）
-  python vq_vae_large.py --dataset stl10 --image-size 96 --downsample 4 --save-results
+Usage examples:
+  # STL-10 (96×96, data must be downloaded and extracted to data/stl10_binary/)
+  python run_vq_vae.py --dataset stl10 --image-size 96 --downsample 4 --save-results
 
-  # 自定义图片目录，图像缩放到 256x256
-  python vq_vae_large.py --dataset custom --image-dir data/train-images --image-size 256 --save-results
+  # Custom image directory, resize images to 256x256
+  python run_vq_vae.py --dataset custom --image-dir data/train-images --image-size 256 --save-results
 
-  # 训练 512x512
-  python vq_vae_large.py --dataset custom --image-dir data/train-images --image-size 512 \
+  # Train at 512x512
+  python run_vq_vae.py --dataset custom --image-dir data/train-images --image-size 512 \
       --downsample 16 --batch-size 16 --num-hiddens 256
 """
 
@@ -25,7 +25,7 @@ import argparse
 import os
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')  # 无 GUI 环境下保存图片
+matplotlib.use('Agg')  # save figures without a GUI display
 import matplotlib.pyplot as plt
 from pathlib import Path
 
@@ -41,24 +41,24 @@ from torchvision.utils import save_image
 from PIL import Image
 
 # ─────────────────────────────────────────────
-# 参数
+# Arguments
 # ─────────────────────────────────────────────
-parser = argparse.ArgumentParser(description='VQ-VAE 大图训练')
+parser = argparse.ArgumentParser(description='VQ-VAE large-image training')
 parser.add_argument('--dataset', type=str, default='stl10',
                     choices=['stl10', 'custom'],
-                    help='数据集类型：stl10（自动下载 96×96）或 custom（自定义图片目录）')
+                    help='Dataset: stl10 (auto-download 96×96) or custom (provide --image-dir)')
 parser.add_argument('--image-dir', type=str, default=None,
-                    help='custom 模式下的训练图片目录（会递归搜索 jpg/png 等格式）')
+                    help='Directory of training images for custom mode (searched recursively)')
 parser.add_argument('--data-root', type=str, default='data',
-                    help='stl10 数据集的下载/缓存根目录')
+                    help='Root directory for downloading/caching the STL-10 dataset')
 parser.add_argument('--image-size', type=int, default=96,
-                    help='训练时统一缩放到此尺寸（stl10 默认 96）')
+                    help='Resize all images to this size during training (default 96 for STL-10)')
 parser.add_argument('--downsample', type=int, default=4, choices=[4, 8, 16],
-                    help='编码器下采样倍数（stl10/96 推荐 4，256 推荐 8）')
+                    help='Encoder downsampling factor (4 recommended for 96px, 8 for 256px)')
 parser.add_argument('--batch-size', type=int, default=64,
-                    help='batch 大小，stl10/96×96 可用 64，大图适当减小')
+                    help='Batch size (64 works for 96×96; reduce for larger images)')
 parser.add_argument('--num-epochs', type=int, default=500,
-                    help='训练 epoch 数')
+                    help='Number of training epochs')
 parser.add_argument('--num-hiddens', type=int, default=128)
 parser.add_argument('--num-residual-hiddens', type=int, default=32)
 parser.add_argument('--num-residual-layers', type=int, default=2)
@@ -68,11 +68,11 @@ parser.add_argument('--commitment-cost', type=float, default=0.25)
 parser.add_argument('--decay', type=float, default=0.99)
 parser.add_argument('--learning-rate', type=float, default=2e-4)
 parser.add_argument('--val-ratio', type=float, default=0.1,
-                    help='验证集比例')
+                    help='Fraction of data used for validation')
 parser.add_argument('--log-interval', type=int, default=10,
-                    help='每多少个 batch 打印一次 loss')
+                    help='Log loss every N batches')
 parser.add_argument('--save-interval', type=int, default=5,
-                    help='每多少个 epoch 保存一次重建样图')
+                    help='Save reconstruction images every N epochs')
 parser.add_argument('--save-results', action='store_true')
 parser.add_argument('--checkpoint', type=str, default='results/vqvae_large_model.pth')
 args = parser.parse_args()
@@ -82,20 +82,20 @@ print(f"Using device: {device}")
 os.makedirs('results', exist_ok=True)
 
 # ─────────────────────────────────────────────
-# 自定义数据集
+# Custom dataset
 # ─────────────────────────────────────────────
 SUPPORTED = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff'}
 
 class ImageFolderDataset(Dataset):
-    """从一个目录（递归）加载所有图片"""
+    """Load all images from a directory (recursive)."""
     def __init__(self, image_dir, image_size, transform=None):
         self.paths = sorted([
             p for p in Path(image_dir).rglob('*')
             if p.suffix.lower() in SUPPORTED
         ])
         if not self.paths:
-            raise RuntimeError(f"在 {image_dir} 中未找到任何图片！")
-        print(f"共找到 {len(self.paths)} 张图片")
+            raise RuntimeError(f"No images found in {image_dir}!")
+        print(f"Found {len(self.paths)} images")
         self.transform = transform or transforms.Compose([
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
@@ -111,7 +111,7 @@ class ImageFolderDataset(Dataset):
 
 
 # ─────────────────────────────────────────────
-# 向量量化层（EMA 版）
+# Vector Quantization layer (EMA version)
 # ─────────────────────────────────────────────
 class VectorQuantizerEMA(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, commitment_cost, decay, epsilon=1e-5):
@@ -162,7 +162,7 @@ class VectorQuantizerEMA(nn.Module):
 
 
 # ─────────────────────────────────────────────
-# 残差块 & 残差栈
+# Residual block & residual stack
 # ─────────────────────────────────────────────
 class Residual(nn.Module):
     def __init__(self, in_channels, num_hiddens, num_residual_hiddens):
@@ -193,10 +193,10 @@ class ResidualStack(nn.Module):
 
 
 # ─────────────────────────────────────────────
-# 编码器（可配置下采样层数）
-#   downsample=4  -> 2层 stride-2  (input/4)
-#   downsample=8  -> 3层 stride-2  (input/8)
-#   downsample=16 -> 4层 stride-2  (input/16)
+# Encoder (configurable downsampling levels)
+#   downsample=4  -> 2 stride-2 layers  (input/4)
+#   downsample=8  -> 3 stride-2 layers  (input/8)
+#   downsample=16 -> 4 stride-2 layers  (input/16)
 # ─────────────────────────────────────────────
 class Encoder(nn.Module):
     def __init__(self, in_channels, num_hiddens, num_residual_layers,
@@ -205,23 +205,23 @@ class Encoder(nn.Module):
         layers = []
         ch = in_channels
 
-        # 根据 downsample 决定 stride-2 层数
+        # Determine number of stride-2 layers from downsample factor
         num_down = {4: 2, 8: 3, 16: 4}[downsample]
         out_channels_seq = []
         for i in range(num_down):
             out_ch = num_hiddens // 2 if i < num_down - 1 else num_hiddens
-            # 避免 0 通道
+            # avoid zero channels
             out_ch = max(out_ch, num_hiddens // (2 ** (num_down - 1 - i)))
             out_channels_seq.append(out_ch)
 
-        # 构建下采样层
+        # Build downsampling layers
         cur_ch = in_channels
         for out_ch in out_channels_seq:
             layers.append(nn.Conv2d(cur_ch, out_ch, kernel_size=4, stride=2, padding=1))
             layers.append(nn.ReLU(True))
             cur_ch = out_ch
 
-        # 最后一个 same-padding conv
+        # final same-padding conv
         layers.append(nn.Conv2d(cur_ch, num_hiddens, kernel_size=3, stride=1, padding=1))
         self._convs = nn.Sequential(*layers)
         self._residual_stack = ResidualStack(num_hiddens, num_hiddens,
@@ -232,7 +232,7 @@ class Encoder(nn.Module):
 
 
 # ─────────────────────────────────────────────
-# 解码器（与编码器对称）
+# Decoder (symmetric to Encoder)
 # ─────────────────────────────────────────────
 class Decoder(nn.Module):
     def __init__(self, in_channels, num_hiddens, num_residual_layers,
@@ -263,7 +263,7 @@ class Decoder(nn.Module):
 
 
 # ─────────────────────────────────────────────
-# 完整模型
+# Full model
 # ─────────────────────────────────────────────
 class Model(nn.Module):
     def __init__(self, num_hiddens, num_residual_layers, num_residual_hiddens,
@@ -287,23 +287,23 @@ class Model(nn.Module):
 
 
 # ─────────────────────────────────────────────
-# 保存对比图（每组：上行原图，下行重建）
+# Save comparison grid (top row: originals, bottom row: reconstructions)
 # ─────────────────────────────────────────────
 def save_comparison(originals, reconstructions, path, nrow=4):
-    """originals, reconstructions: tensor [N, C, H, W]，值域 [-0.5, 0.5]"""
+    """originals, reconstructions: tensor [N, C, H, W], value range [-0.5, 0.5]"""
     n = min(nrow, originals.shape[0])
     orig = (originals[:n].cpu() + 0.5).clamp(0, 1)
     recon = (reconstructions[:n].cpu() + 0.5).clamp(0, 1)
-    # 上行原图，下行重建
+    # top row: originals, bottom row: reconstructions
     grid = torch.cat([orig, recon], dim=0)  # [2n, C, H, W]
     save_image(grid, path, nrow=n)
 
 
 # ─────────────────────────────────────────────
-# 训练主函数
+# Training entry point
 # ─────────────────────────────────────────────
 def train():
-    # ── 数据集 ──
+    # ── Dataset ──
     norm = transforms.Normalize((0.5, 0.5, 0.5), (1.0, 1.0, 1.0))
     tf = transforms.Compose([
         transforms.Resize((args.image_size, args.image_size)),
@@ -312,22 +312,14 @@ def train():
     ])
 
     if args.dataset == 'stl10':
-        print(f"使用 STL-10 数据集（{args.image_size}×{args.image_size}），从 {args.data_root}/stl10_binary 加载（不自动下载）")
-        stl_dir = Path(args.data_root) / 'stl10_binary'
-        expected_files = ['train_X.bin', 'test_X.bin']
-        missing = [f for f in expected_files if not (stl_dir / f).exists()]
-        if missing:
-            raise RuntimeError(
-                f"STL-10 数据未找到。请手动下载并解压到 {stl_dir}/\n"
-                "下载地址: https://cs.stanford.edu/~acoates/stl10/stl10_binary.tar.gz\n"
-                "解压后目录结构应包含: train_X.bin, train_y.bin, test_X.bin, test_y.bin, ..."
-            )
+        print(f"Using STL-10 dataset ({args.image_size}×{args.image_size}), "
+              f"data root: {args.data_root} (will auto-download if not present)")
 
-        # 合并 train（5000张）+ test（8000张）= 13000 张，从中切出少量做验证
+        # Merge train (5 000) + test (8 000) = 13 000 images, split off a small val set
         stl_train = tv_datasets.STL10(root=args.data_root, split='train',
-                                      download=False, transform=tf)
+                                      download=True, transform=tf)
         stl_test  = tv_datasets.STL10(root=args.data_root, split='test',
-                                      download=False, transform=tf)
+                                      download=True, transform=tf)
         full_dataset = torch.utils.data.ConcatDataset([stl_train, stl_test])
 
         val_size   = max(8, int(len(full_dataset) * args.val_ratio))
@@ -336,22 +328,22 @@ def train():
             full_dataset, [train_size, val_size],
             generator=torch.Generator().manual_seed(42)
         )
-        print(f"  合并后总计: {len(full_dataset)} 张  训练集: {train_size} 张  验证集: {val_size} 张")
+        print(f"  Total: {len(full_dataset)} images  Train: {train_size}  Val: {val_size}")
     else:
         if not args.image_dir:
-            raise ValueError("custom 模式需要指定 --image-dir")
+            raise ValueError("custom mode requires --image-dir")
         full_dataset = ImageFolderDataset(args.image_dir, args.image_size)
         val_size = max(1, int(len(full_dataset) * args.val_ratio))
         train_size = len(full_dataset) - val_size
         train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-        print(f"  训练集: {train_size} 张  验证集: {val_size} 张")
+        print(f"  Train: {train_size} images  Val: {val_size} images")
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size,
                               shuffle=True, num_workers=4, pin_memory=True)
     val_loader   = DataLoader(val_dataset, batch_size=min(8, len(val_dataset)),
                               shuffle=False, num_workers=2, pin_memory=True)
 
-    # 计算数据方差（用前 1000 张估算）
+    # Estimate data variance from up to 1000 training samples
     n_sample = min(1000, len(train_dataset))
     sample_imgs = []
     for i in range(n_sample):
@@ -359,9 +351,9 @@ def train():
         img = item[0] if isinstance(item, (tuple, list)) else item
         sample_imgs.append(img)
     data_variance = torch.stack(sample_imgs).var().item()
-    print(f"数据方差: {data_variance:.4f}")
+    print(f"Data variance: {data_variance:.4f}")
 
-    # ── 模型 ──
+    # ── Model ──
     model = Model(
         args.num_hiddens, args.num_residual_layers, args.num_residual_hiddens,
         args.num_embeddings, args.embedding_dim,
@@ -369,7 +361,7 @@ def train():
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"模型参数量: {total_params / 1e6:.2f}M")
+    print(f"Model parameters: {total_params / 1e6:.2f}M")
 
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_epochs)
@@ -383,7 +375,7 @@ def train():
         epoch_recon, epoch_perp = [], []
 
         for batch_idx, batch in enumerate(train_loader):
-            # 兼容 (image, label) tuple（STL-10）和纯 image tensor（自定义）
+            # support both (image, label) tuple (STL-10) and plain image tensor (custom)
             data = batch[0] if isinstance(batch, (tuple, list)) else batch
             data = data.to(device)
             optimizer.zero_grad()
@@ -408,7 +400,7 @@ def train():
         train_recon_errors.append(avg_train_recon)
         train_perplexities.append(avg_perp)
 
-        # ── 验证 ──
+        # ── Validation ──
         model.eval()
         val_recon_sum = 0.0
         with torch.no_grad():
@@ -425,7 +417,7 @@ def train():
               f"  val_recon={avg_val_recon:.4f}"
               f"  perplexity={avg_perp:.1f}")
 
-        # ── 定期保存重建样图 ──
+        # ── Periodically save reconstruction samples ──
         if epoch % args.save_interval == 0 or epoch == args.num_epochs:
             with torch.no_grad():
                 sample_batch = next(iter(val_loader))
@@ -437,9 +429,9 @@ def train():
                 f'results/large_reconstruction_epoch{epoch:03d}.png',
                 nrow=4
             )
-            print(f"  -> 重建样图已保存 epoch {epoch}")
+            print(f"  -> Reconstruction saved at epoch {epoch}")
 
-    # ── 绘制训练曲线 ──
+    # ── Plot training curves ──
     if args.save_results:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
         ax1.plot(train_recon_errors, label='train')
@@ -453,14 +445,14 @@ def train():
         plt.tight_layout()
         plt.savefig('results/large_training_curve.png')
         plt.close()
-        print("训练曲线已保存到 results/large_training_curve.png")
+        print("Training curve saved to results/large_training_curve.png")
 
-    # ── 保存模型 ──
+    # ── Save model ──
     torch.save({
         'model_state_dict': model.state_dict(),
         'args': vars(args),
     }, args.checkpoint)
-    print(f"模型已保存到 {args.checkpoint}")
+    print(f"Model saved to {args.checkpoint}")
 
     return model
 
