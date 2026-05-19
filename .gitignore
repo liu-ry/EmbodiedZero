@@ -4,6 +4,7 @@ dp/results_ddpm/
 dp/results_ddim/
 dp/results_sd/
 dp/results_fm/
+transformer/output/
 
 # Downloaded datasets
 data/
