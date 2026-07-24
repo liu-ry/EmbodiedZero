@@ -46,6 +46,17 @@ cd dp && python run_flow_matching.py --epochs 10
 
 ---
 
+## 学习模块
+
+| 目录 | 内容 |
+|------|------|
+| `transformer/` | 注意力、位置编码、Transformer 与 ViT |
+| `MOE/` | 最小稀疏 MoE：Router、Top-k、Expert、负载均衡与容量限制 |
+| `vae/` | VAE 与 VQ-VAE |
+| `diffusion/` | DDPM、DDIM、Stable Diffusion 与 Flow Matching |
+
+---
+
 ## 持续更新中
 - 欢迎提交Issues、PR
 - 欢迎交流

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MoE Routing Explorer</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">EMBODIEDZERO · INTERACTIVE LAB</p>
+          <h1>MoE Routing Explorer</h1>
+          <p class="subtitle">逐层追踪每个 token 如何被 Router 分配给 Expert。</p>
+        </div>
+        <div class="header-actions">
+          <label class="upload-button">
+            导入真实路由 JSON
+            <input id="trace-upload" type="file" accept="application/json,.json" />
+          </label>
+          <button id="reset-button" class="ghost-button">生成新的随机路由</button>
+        </div>
+      </header>
+
+      <section class="overview-grid">
+        <label class="metric-card config-card"><span>Layers</span><input id="config-layers" type="number" min="1" max="12" value="3" /></label>
+        <label class="metric-card config-card"><span>Tokens</span><input id="config-tokens" type="number" min="1" max="32" value="12" /></label>
+        <label class="metric-card config-card"><span>Experts</span><input id="config-experts" type="number" min="1" max="16" value="4" /></label>
+        <label class="metric-card config-card"><span>Top-k</span><input id="config-topk" type="number" min="1" max="16" value="2" /></label>
+        <article class="metric-card wide"><span>Trace source</span><strong id="trace-source">Browser random simulation</strong></article>
+      </section>
+      <p class="config-hint">修改 Layers、Tokens、Experts 或 Top-k 后按 Enter，或点击“生成新的随机路由”。Top-k 会自动限制为不大于 Experts。</p>
+
+      <section id="moe-focus" class="walkthrough panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">INTERACTIVE EXPLAINER</p>
+            <h2>跟随一个 Token 完成一次 MoE 路由</h2>
+          </div>
+          <p class="muted">下方流图与这里共享当前 Layer 和 Token</p>
+        </div>
+        <div id="step-tabs" class="step-tabs"></div>
+        <div id="walkthrough-stage" class="walkthrough-stage"></div>
+      </section>
+
+      <section class="routing-workspace">
+        <aside class="transformer-sidebar" aria-label="Transformer block architecture">
+          <p class="eyebrow">TRANSFORMER BLOCK</p>
+          <div class="sidebar-architecture">
+            <div class="sidebar-node">Token states<br /><small>(B, T, D)</small></div>
+            <i class="sidebar-arrow">↓</i>
+            <div class="sidebar-node attention-side">Self-Attention<br /><small>LayerNorm + MHA</small></div>
+            <i class="sidebar-arrow">↓</i>
+            <div class="sidebar-node residual-side">+ Residual</div>
+            <i class="sidebar-arrow">↓</i>
+            <a class="sidebar-node moe-side" href="#moe-focus">MoE FFN<br /><small>Router + Experts</small><b>当前放大视图 →</b></a>
+            <i class="sidebar-arrow">↓</i>
+            <div class="sidebar-node residual-side">+ Residual</div>
+          </div>
+          <p class="sidebar-note">MoE 只替换 Transformer 中的 FFN；Attention 仍负责 token 间的信息交换。</p>
+        </aside>
+
+        <div class="routing-content">
+          <section class="layer-nav" aria-label="MoE layers">
+            <div id="layer-tabs" class="layer-tabs"></div>
+            <div class="playback">
+              <button id="previous-layer" aria-label="上一层">←</button>
+              <button id="autoplay" aria-label="自动播放">播放</button>
+              <button id="next-layer" aria-label="下一层">→</button>
+            </div>
+          </section>
+
+          <section class="main-grid">
+            <article class="flow-card panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">DATA FLOW</p>
+              <h2 id="flow-title">Layer 0 · Router → Experts</h2>
+            </div>
+            <p id="flow-hint" class="muted">点击 Token 只查看它的路由路径</p>
+          </div>
+          <div id="flow-legend" class="legend"></div>
+          <div id="flow-view" class="flow-view"></div>
+            </article>
+
+            <aside class="details-column">
+          <article class="panel detail-card">
+            <p class="eyebrow">SELECTED TOKEN</p>
+            <h2 id="token-title">Token 0</h2>
+            <div id="token-routes" class="route-list"></div>
+            <div class="probability-section">
+              <p class="section-label">Router probability distribution</p>
+              <div id="probability-bars"></div>
+            </div>
+          </article>
+
+          <article class="panel detail-card">
+            <p class="eyebrow">LAYER HEALTH</p>
+            <div id="layer-health" class="health-grid"></div>
+            <p class="section-label">Actual expert load</p>
+            <div id="load-bars"></div>
+          </article>
+            </aside>
+          </section>
+
+          <section class="panel notes">
+            <p class="eyebrow">HOW TO READ</p>
+            <p>每条连线代表一个 Top-k assignment，线宽与透明度对应归一化 gate 权重。深色连线是当前选中的 token；切换 Layer 可观察同一 token 的专家选择如何随网络深度变化。</p>
+          </section>
+        </div>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
